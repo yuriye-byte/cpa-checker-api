@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 import os
 import shutil
 import tempfile
@@ -39,10 +39,15 @@ async def validate(
                     },
                 )
 
-            return FileResponse(
-                output_path,
+            with open(output_path, "rb") as f:
+                file_bytes = f.read()
+
+            return Response(
+                content=file_bytes,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                filename="result_deposits.xlsx"
+                headers={
+                    "Content-Disposition": 'attachment; filename="result_deposits.xlsx"'
+                },
             )
 
     except Exception as e:
