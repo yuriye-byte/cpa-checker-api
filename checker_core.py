@@ -1,12 +1,9 @@
 import re
 import unicodedata
-from pathlib import Path
-
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
-
 
 PREVIEW_SHEET = "parsed_summary_preview"
 COMPARISON_SHEET = "comparison"
@@ -15,10 +12,6 @@ ELIGIBLE_SHEET = "eligible_players"
 RAW_SHEET = "export_raw"
 RULES_SHEET = "rules"
 
-
-# ---------------------------
-# Helpers
-# ---------------------------
 
 def safe_float(value):
     if value is None:
@@ -30,20 +23,14 @@ def safe_float(value):
         except Exception:
             pass
         return float(value)
-
     s = str(value).strip()
     if not s:
         return None
-
-    s = s.replace("\xa0", " ")
-    s = s.replace("$", "").replace("€", "").replace("₽", "")
-    s = s.replace(" ", "")
-
+    s = s.replace("\xa0", " ").replace("$", "").replace("€", "").replace("₽", "").replace(" ", "")
     if "," in s and "." in s:
         s = s.replace(",", "")
     else:
         s = s.replace(",", ".")
-
     try:
         return float(s)
     except Exception:
@@ -66,27 +53,89 @@ def strip_accents(text: str) -> str:
     return "".join(ch for ch in text if not unicodedata.combining(ch))
 
 
+COUNTRY_ALIASES = {
+    "korea (south)": "south korea",
+    "south korea": "south korea",
+    "republic of korea": "south korea",
+    "korea, republic of": "south korea",
+    "venezuela (bolivarian republic)": "venezuela",
+    "venezuela, bolivarian republic of": "venezuela",
+    "venezuela": "venezuela",
+    "russian federation": "russia",
+    "russia": "russia",
+    "cote d'ivoire": "cote d'ivoire",
+    "côte d'ivoire": "cote d'ivoire",
+    "ivory coast": "cote d'ivoire",
+    "cote divoire": "cote d'ivoire",
+    "kyrgyz republic": "kyrgyzstan",
+    "kyrgyzstan": "kyrgyzstan",
+    "lao people's democratic republic": "laos",
+    "laos": "laos",
+    "syrian arab republic": "syria",
+    "syria": "syria",
+    "iran (islamic republic of)": "iran",
+    "iran": "iran",
+    "moldova, republic of": "moldova",
+    "moldova": "moldova",
+    "tanzania, united republic of": "tanzania",
+    "tanzania": "tanzania",
+    "bolivia (plurinational state of)": "bolivia",
+    "bolivia": "bolivia",
+    "viet nam": "vietnam",
+    "vietnam": "vietnam",
+    "uae": "united arab emirates",
+    "united arab emirates": "united arab emirates",
+    "usa": "united states",
+    "us": "united states",
+    "united states of america": "united states",
+    "united states": "united states",
+    "uk": "united kingdom",
+    "great britain": "united kingdom",
+    "united kingdom": "united kingdom",
+}
+
+GEO_CODE_MAP = {
+    "AE": "United Arab Emirates", "AF": "Afghanistan", "AL": "Albania", "AM": "Armenia",
+    "AO": "Angola", "AR": "Argentina", "AT": "Austria", "AU": "Australia", "AZ": "Azerbaijan",
+    "BA": "Bosnia and Herzegovina", "BD": "Bangladesh", "BE": "Belgium", "BF": "Burkina Faso",
+    "BG": "Bulgaria", "BH": "Bahrain", "BJ": "Benin", "BO": "Bolivia", "BR": "Brazil",
+    "BW": "Botswana", "BY": "Belarus", "BZ": "Belize", "CA": "Canada", "CD": "Congo (DRC)",
+    "CF": "Central African Republic", "CG": "Congo", "CH": "Switzerland", "CI": "Côte d'Ivoire",
+    "CL": "Chile", "CM": "Cameroon", "CN": "China", "CO": "Colombia", "CR": "Costa Rica",
+    "CU": "Cuba", "CV": "Cape Verde", "CY": "Cyprus", "CZ": "Czech Republic", "DE": "Germany",
+    "DJ": "Djibouti", "DK": "Denmark", "DO": "Dominican Republic", "DZ": "Algeria",
+    "EC": "Ecuador", "EE": "Estonia", "EG": "Egypt", "ES": "Spain", "ET": "Ethiopia",
+    "FI": "Finland", "FR": "France", "GA": "Gabon", "GB": "United Kingdom", "GE": "Georgia",
+    "GH": "Ghana", "GM": "Gambia", "GN": "Guinea", "GQ": "Equatorial Guinea", "GR": "Greece",
+    "GT": "Guatemala", "GW": "Guinea-Bissau", "GY": "Guyana", "HN": "Honduras", "HR": "Croatia",
+    "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland", "IL": "Israel", "IN": "India",
+    "IQ": "Iraq", "IR": "Iran", "IT": "Italy", "JM": "Jamaica", "JO": "Jordan", "JP": "Japan",
+    "KE": "Kenya", "KG": "Kyrgyzstan", "KH": "Cambodia", "KM": "Comoros", "KR": "South Korea",
+    "KW": "Kuwait", "KZ": "Kazakhstan", "LA": "Laos", "LB": "Lebanon", "LK": "Sri Lanka",
+    "LR": "Liberia", "LS": "Lesotho", "LT": "Lithuania", "LU": "Luxembourg", "LV": "Latvia",
+    "LY": "Libya", "MA": "Morocco", "MD": "Moldova", "ME": "Montenegro", "MG": "Madagascar",
+    "MK": "North Macedonia", "ML": "Mali", "MM": "Myanmar", "MN": "Mongolia", "MR": "Mauritania",
+    "MT": "Malta", "MU": "Mauritius", "MW": "Malawi", "MX": "Mexico", "MY": "Malaysia",
+    "MZ": "Mozambique", "NA": "Namibia", "NE": "Niger", "NG": "Nigeria", "NI": "Nicaragua",
+    "NL": "Netherlands", "NO": "Norway", "NP": "Nepal", "NZ": "New Zealand", "OM": "Oman",
+    "PA": "Panama", "PE": "Peru", "PG": "Papua New Guinea", "PH": "Philippines", "PK": "Pakistan",
+    "PL": "Poland", "PT": "Portugal", "PY": "Paraguay", "QA": "Qatar", "RO": "Romania",
+    "RS": "Serbia", "RU": "Russia", "RW": "Rwanda", "SA": "Saudi Arabia", "SC": "Seychelles",
+    "SD": "Sudan", "SE": "Sweden", "SG": "Singapore", "SI": "Slovenia", "SK": "Slovakia",
+    "SL": "Sierra Leone", "SN": "Senegal", "SO": "Somalia", "SR": "Suriname", "SV": "El Salvador",
+    "SY": "Syria", "SZ": "Eswatini", "TD": "Chad", "TG": "Togo", "TH": "Thailand",
+    "TJ": "Tajikistan", "TN": "Tunisia", "TR": "Turkey", "TT": "Trinidad and Tobago",
+    "TW": "Taiwan", "TZ": "Tanzania", "UA": "Ukraine", "UG": "Uganda", "US": "United States",
+    "UY": "Uruguay", "UZ": "Uzbekistan", "VE": "Venezuela", "VN": "Vietnam", "YE": "Yemen",
+    "ZA": "South Africa", "ZM": "Zambia", "ZW": "Zimbabwe",
+}
+
+
 def normalize_geo(text: str) -> str:
     s = normalize_spaces(text).lower()
     s = s.replace("’", "'").replace("`", "'").replace("´", "'")
     s = strip_accents(s)
-
-    aliases = {
-        "cote d'ivoire": "cote d'ivoire",
-        "côte d'ivoire": "cote d'ivoire",
-        "ivory coast": "cote d'ivoire",
-        "cote divoire": "cote d'ivoire",
-        "coted'ivoire": "cote d'ivoire",
-        "russian federation": "russian federation",
-        "venezuela (bolivarian republic)": "venezuela (bolivarian republic)",
-        "korea (south)": "korea (south)",
-        "south korea": "korea (south)",
-    }
-    return aliases.get(s, s)
-
-
-def geo_display(text: str) -> str:
-    return normalize_spaces(text)
+    return COUNTRY_ALIASES.get(s, s)
 
 
 def normalize_site_id(value):
@@ -112,100 +161,41 @@ def is_close_money(a, b, tol=0.5):
 
 
 def extract_number_after_keyword(line: str, keyword: str):
-    m = re.search(
-        rf"{keyword}\s*(?:,\s*\$)?\s*[:;=]?\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)",
-        line,
-        flags=re.I,
-    )
-    if not m:
-        return None
-    return safe_float(m.group(1))
+    m = re.search(rf"{keyword}\s*(?:,\s*\$)?\s*[:;=]?\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
+    return safe_float(m.group(1)) if m else None
 
-
-# ---------------------------
-# Summary parsers
-# ---------------------------
 
 def parse_en_structured(line: str):
     if "country:" not in line.lower():
         return None
-
-    website_m = re.search(r"Website\s*:?\s*([^;,\n]+)", line, flags=re.I)
-    geo_m = re.search(r"Country\s*:\s*([^;\n]+?)(?=;\s*Baseline|;\s*Wager|;\s*CPA|;\s*FTD|;\s*Spend|$)", line, flags=re.I)
+    website_m = re.search(r"Website\s*:\s*([^;,\n]+)", line, flags=re.I)
+    geo_m = re.search(r"Country\s*:\s*([^;,\n]+)", line, flags=re.I)
     baseline_m = re.search(r"Baseline\s*:\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
     wager_m = re.search(r"Wager\s*:\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
     ftd_m = re.search(r"FTD\s*:\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
-
-    cpa_m = re.search(
-        r"CPA\s*(?:,\s*\$)?\s*[:;]\s*([0-9]+(?:[.,][0-9]+)?)",
-        line,
-        flags=re.I,
-    )
-    spend_m = re.search(
-        r"Spend\s*(?:,\s*\$)?\s*[:;]\s*([0-9]+(?:[.,][0-9]+)?)",
-        line,
-        flags=re.I,
-    )
-
+    cpa_m = re.search(r"CPA\s*(?:,\s*\$)?\s*[:;]\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
+    spend_m = re.search(r"Spend\s*(?:,\s*\$)?\s*[:;]\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
     if not (geo_m and baseline_m and wager_m and cpa_m and ftd_m and spend_m):
         return None
-
     return {
-        "status": "OK",
-        "parser_used": "en_structured",
-        "raw_line": line,
+        "status": "OK", "parser_used": "en_structured", "raw_line": line,
         "website": normalize_site_id(website_m.group(1)) if website_m else "",
-        "geo": geo_display(geo_m.group(1)),
-        "baseline_type": "inclusive",
-        "baseline_value": safe_float(baseline_m.group(1)),
-        "wager": safe_float(wager_m.group(1)),
-        "rate": safe_float(cpa_m.group(1)),
-        "manager_ftd": safe_int(ftd_m.group(1)),
-        "manager_sum": safe_float(spend_m.group(1)),
-        "comment": "",
-    }
-
-
-def parse_ru_freeform(line: str):
-    m = re.search(
-        r"^\s*(?P<geo>.+?)\s+base\s*(?P<base>[0-9]+(?:[.,][0-9]+)?)\s+"
-        r"(?P<rate>[0-9]+(?:[.,][0-9]+)?)\s+ставка\s+"
-        r"(?P<ftd>[0-9]+(?:[.,][0-9]+)?)\s+фтд\s+"
-        r"(?P<sum>[0-9]+(?:[.,][0-9]+)?)\s+сумма\s*$",
-        line,
-        flags=re.I,
-    )
-    if not m:
-        return None
-
-    return {
-        "status": "OK",
-        "parser_used": "ru_freeform",
-        "raw_line": line,
-        "website": "",
-        "geo": geo_display(m.group("geo")),
-        "baseline_type": "inclusive",
-        "baseline_value": safe_float(m.group("base")),
-        "wager": 0.0,
-        "rate": safe_float(m.group("rate")),
-        "manager_ftd": safe_int(m.group("ftd")),
-        "manager_sum": safe_float(m.group("sum")),
-        "comment": "",
+        "geo": normalize_spaces(geo_m.group(1)), "baseline_type": "inclusive",
+        "baseline_value": safe_float(baseline_m.group(1)), "wager": safe_float(wager_m.group(1)),
+        "rate": safe_float(cpa_m.group(1)), "manager_ftd": safe_int(ftd_m.group(1)),
+        "manager_sum": safe_float(spend_m.group(1)), "comment": "",
     }
 
 
 def parse_short_cpa(line: str):
     if "cpa" not in line.lower() or "ftd" not in line.lower():
         return None
-
     working_line = line
     website = ""
-
     website_m = re.search(r"^\s*Website\s*:?\s*([^\s;,:]+)\s+", working_line, flags=re.I)
     if website_m:
         website = normalize_site_id(website_m.group(1))
         working_line = working_line[website_m.end():].strip()
-
     if re.search(r"\bmin\s*/\s*dep\b", working_line, flags=re.I):
         baseline_type = "positive"
         baseline_value = 0.0
@@ -217,30 +207,18 @@ def parse_short_cpa(line: str):
         baseline_type = "inclusive"
         baseline_value = safe_float(m_base.group(1))
         geo = re.split(r"\bbase(?:line)?\s*[0-9]+(?:[.,][0-9]+)?\b", working_line, flags=re.I)[0].strip(" ,;")
-
     wager = extract_number_after_keyword(working_line, "Wager")
     if wager is None:
         wager = 0.0
-
     cpa = extract_number_after_keyword(working_line, "CPA")
     ftd = extract_number_after_keyword(working_line, "FTD")
     spend = extract_number_after_keyword(working_line, "Spend")
-
     if not geo or cpa is None or ftd is None or spend is None:
         return None
-
     return {
-        "status": "OK",
-        "parser_used": "short_cpa",
-        "raw_line": line,
-        "website": website,
-        "geo": geo_display(geo),
-        "baseline_type": baseline_type,
-        "baseline_value": baseline_value,
-        "wager": wager,
-        "rate": cpa,
-        "manager_ftd": safe_int(ftd),
-        "manager_sum": safe_float(spend),
+        "status": "OK", "parser_used": "short_cpa", "raw_line": line, "website": website,
+        "geo": normalize_spaces(geo), "baseline_type": baseline_type, "baseline_value": baseline_value,
+        "wager": wager, "rate": cpa, "manager_ftd": safe_int(ftd), "manager_sum": safe_float(spend),
         "comment": "",
     }
 
@@ -248,122 +226,60 @@ def parse_short_cpa(line: str):
 def parse_flexible(line: str):
     if not line:
         return None
-
     working_line = line
     website = ""
-
     m_site = re.search(r"\bWebsite\s*:?\s*(\d+)\b", working_line, flags=re.I)
     if m_site:
         website = normalize_site_id(m_site.group(1))
         working_line = working_line.replace(m_site.group(0), " ")
-
     geo = re.split(r"\b(CPA|FTD|Spend|Base|Baseline|Wager|\$)\b", working_line, flags=re.I)[0].strip(" ,;")
-
     def find_num(keyword):
         m = re.search(rf"{keyword}\s*[:;]?\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", working_line, flags=re.I)
         return safe_float(m.group(1)) if m else None
-
     cpa = find_num("CPA")
     ftd = find_num("FTD")
     spend = find_num("Spend")
     wager = find_num("Wager")
-
     m_base = re.search(r"(Base|Baseline)\s*[:;]?\s*([0-9]+(?:[.,][0-9]+)?)", working_line, flags=re.I)
     baseline_value = safe_float(m_base.group(2)) if m_base else 0.0
     baseline_type = "inclusive"
-
     if cpa is None:
         m_dollar = re.search(r"\$\s*([0-9]+(?:[.,][0-9]+)?)", working_line)
         if m_dollar:
             cpa = safe_float(m_dollar.group(1))
-
     if not geo or cpa is None or ftd is None or spend is None:
         return None
-
     return {
-        "status": "OK",
-        "parser_used": "flexible",
-        "raw_line": line,
-        "website": website,
-        "geo": geo_display(geo),
-        "baseline_type": baseline_type,
-        "baseline_value": baseline_value,
-        "wager": wager if wager is not None else 0.0,
-        "rate": cpa,
-        "manager_ftd": safe_int(ftd),
-        "manager_sum": safe_float(spend),
-        "comment": "",
+        "status": "OK", "parser_used": "flexible", "raw_line": line, "website": website,
+        "geo": normalize_spaces(geo), "baseline_type": baseline_type, "baseline_value": baseline_value,
+        "wager": wager if wager is not None else 0.0, "rate": cpa, "manager_ftd": safe_int(ftd),
+        "manager_sum": safe_float(spend), "comment": "",
     }
 
 
 def parse_geo_list_format(line: str):
     if "(" not in line:
         return None
-
     website = ""
     m_site = re.search(r"\bSite(?:id)?\s*[-: ]\s*(\d+)\b", line, flags=re.I)
     if m_site:
         website = normalize_site_id(m_site.group(1))
-
-    pattern = re.compile(
-        r"\b([A-Z]{2})\s*-\s*(?:\$)?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:\$)?\s*\(\s*([0-9]+)\s*\)",
-        flags=re.I,
-    )
+    pattern = re.compile(r"\b([A-Z]{2})\s*-\s*(?:\$)?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:\$)?\s*\(\s*([0-9]+)\s*\)", flags=re.I)
     matches = pattern.findall(line)
     if not matches:
         return None
-
-    geo_map = {
-        "AR": "Argentina",
-        "BJ": "Benin",
-        "BF": "Burkina Faso",
-        "CM": "Cameroon",
-        "CI": "Côte d'Ivoire",
-        "EG": "Egypt",
-        "GA": "Gabon",
-        "GM": "Gambia",
-        "ML": "Mali",
-        "MN": "Mongolia",
-        "MZ": "Mozambique",
-        "SN": "Senegal",
-        "TG": "Togo",
-        "ZM": "Zambia",
-        "DZ": "Algeria",
-        "GN": "Guinea",
-        "IQ": "Iraq",
-        "KG": "Kyrgyzstan",
-        "MY": "Malaysia",
-        "MR": "Mauritania",
-        "MX": "Mexico",
-        "MA": "Morocco",
-        "PK": "Pakistan",
-        "PE": "Peru",
-        "RU": "Russian Federation",
-        "LK": "Sri Lanka",
-    }
-
     results = []
     for geo_code, spend, ftd in matches:
         spend_val = safe_float(spend)
         ftd_val = safe_int(ftd)
         if spend_val is None or ftd_val in (None, 0):
             continue
-
+        geo_name = GEO_CODE_MAP.get(geo_code.upper(), geo_code.upper())
         results.append({
-            "status": "OK",
-            "parser_used": "geo_list",
-            "raw_line": line,
-            "website": website,
-            "geo": geo_map.get(geo_code.upper(), geo_code.upper()),
-            "baseline_type": "inclusive",
-            "baseline_value": 0.0,
-            "wager": 0.0,
-            "rate": spend_val / ftd_val,
-            "manager_ftd": ftd_val,
-            "manager_sum": spend_val,
-            "comment": "",
+            "status": "OK", "parser_used": "geo_list", "raw_line": line, "website": website,
+            "geo": geo_name, "baseline_type": "inclusive", "baseline_value": 0.0, "wager": 0.0,
+            "rate": spend_val / ftd_val, "manager_ftd": ftd_val, "manager_sum": spend_val, "comment": "",
         })
-
     return results if results else None
 
 
@@ -371,48 +287,32 @@ def parse_summary_line(line: str):
     line = normalize_spaces(line)
     if not line:
         return None
-
     low = line.lower()
     if low.startswith("period:") or low.startswith("total spend"):
         return {"status": "META", "raw_line": line}
-
-    for parser in [parse_en_structured, parse_ru_freeform, parse_short_cpa, parse_flexible, parse_geo_list_format]:
+    for parser in [parse_en_structured, parse_short_cpa, parse_flexible, parse_geo_list_format]:
         try:
             result = parser(line)
             if result is not None:
                 return result
         except Exception:
             pass
-
     return {
-        "status": "ERROR",
-        "parser_used": "",
-        "raw_line": line,
-        "website": "",
-        "geo": "",
-        "baseline_type": "",
-        "baseline_value": None,
-        "wager": None,
-        "rate": None,
-        "manager_ftd": None,
-        "manager_sum": None,
-        "comment": "Не удалось распознать строку сводки",
+        "status": "ERROR", "parser_used": "", "raw_line": line, "website": "", "geo": "",
+        "baseline_type": "", "baseline_value": None, "wager": None, "rate": None,
+        "manager_ftd": None, "manager_sum": None, "comment": "Не удалось распознать строку сводки",
     }
 
 
 def parse_summary_text(text: str):
-    parsed = []
-    unrecognized = []
-
+    parsed, unrecognized = [], []
     for raw in text.splitlines():
         raw = raw.strip()
         if not raw:
             continue
-
         row = parse_summary_line(raw)
         if row is None:
             continue
-
         if isinstance(row, list):
             for item in row:
                 if item is None or item.get("status") == "META":
@@ -426,17 +326,12 @@ def parse_summary_text(text: str):
             parsed.append(row)
             if row["status"] != "OK":
                 unrecognized.append(row)
-
     return parsed, unrecognized
 
 
-# ---------------------------
-# Export parsing
-# ---------------------------
-
 REQUIRED_COLS = {
     "player_id": ["ID гравця", "ID игрока", "Player ID", "ID"],
-    "site_id": ["ID сайта", "ID сайту", "Site ID", "Website ID", "Website", "ID site", "ID сайту/сайта"],
+    "site_id": ["ID сайта", "ID сайту", "Site ID", "Website ID", "Website", "ID site", "ID сайту"],
     "geo": ["Країна", "Страна", "Country"],
     "deposit": ["Сума депозитів", "Сумма депозитов", "Sum of all deposits", "Deposit Sum", "Deposits", "Deposit"],
     "bets": ["Сума ставок", "Сумма ставок", "Total bet amount", "Bet Sum", "Wager Sum", "Wager", "Bets"],
@@ -444,8 +339,7 @@ REQUIRED_COLS = {
 
 
 def detect_header_row(df_raw: pd.DataFrame):
-    best_idx = None
-    best_score = -1
+    best_idx, best_score = None, -1
     for i in range(min(30, len(df_raw))):
         row = [str(x).strip() for x in df_raw.iloc[i].tolist()]
         score = 0
@@ -455,9 +349,7 @@ def detect_header_row(df_raw: pd.DataFrame):
                     score += 1
                     break
         if score > best_score:
-            best_score = score
-            best_idx = i
-
+            best_score, best_idx = score, i
     if best_idx is None or best_score < 3:
         raise ValueError("Не удалось найти строку заголовков в выгрузке.")
     return best_idx
@@ -474,33 +366,24 @@ def read_export_file(xlsx_path: str):
     df_raw = pd.read_excel(xlsx_path, sheet_name=0, header=None)
     header_row = detect_header_row(df_raw)
     df = pd.read_excel(xlsx_path, sheet_name=0, header=header_row).copy()
-
     player_col = find_column_name(df.columns, REQUIRED_COLS["player_id"])
     site_col = find_column_name(df.columns, REQUIRED_COLS["site_id"])
     geo_col = find_column_name(df.columns, REQUIRED_COLS["geo"])
     deposit_col = find_column_name(df.columns, REQUIRED_COLS["deposit"])
     bets_col = find_column_name(df.columns, REQUIRED_COLS["bets"])
-
     if not geo_col or not deposit_col or not bets_col:
         raise ValueError("Не найдены нужные колонки в выгрузке.")
-
     cleaned = pd.DataFrame()
     cleaned["player_id"] = df[player_col] if player_col else None
     cleaned["site_id"] = df[site_col].apply(normalize_site_id) if site_col else ""
     cleaned["geo"] = df[geo_col]
     cleaned["deposit"] = df[deposit_col].apply(safe_float)
     cleaned["bets"] = df[bets_col].apply(safe_float)
-
     cleaned = cleaned[cleaned["geo"].notna()].copy()
     cleaned["geo_raw"] = cleaned["geo"].astype(str).str.strip()
     cleaned["geo_norm"] = cleaned["geo_raw"].apply(normalize_geo)
-
     return cleaned, df
 
-
-# ---------------------------
-# Comparison logic
-# ---------------------------
 
 def is_valid_deposit(deposit, bets, baseline_type, baseline_value, wager):
     if deposit is None or bets is None or wager is None:
@@ -515,34 +398,20 @@ def is_valid_deposit(deposit, bets, baseline_type, baseline_value, wager):
 
 
 def build_comparison(parsed_rows, export_df):
-    comparison_rows = []
-    eligible_rows = []
-
+    comparison_rows, eligible_rows = [], []
     for row in parsed_rows:
         if row["status"] != "OK":
             comparison_rows.append({
-                "website": row.get("website", ""),
-                "geo": row.get("geo", ""),
-                "baseline_type": row.get("baseline_type", ""),
-                "baseline_value": row.get("baseline_value"),
-                "wager": row.get("wager"),
-                "rate": row.get("rate"),
-                "manager_ftd": row.get("manager_ftd"),
-                "actual_valid_ftd": None,
-                "delta_ftd": None,
-                "manager_sum": row.get("manager_sum"),
-                "expected_sum_by_manager_ftd": None,
-                "actual_sum": None,
-                "sum_delta": None,
-                "is_sum_ok": False,
-                "is_ftd_ok": False,
-                "status": "ERROR",
-                "comment": row.get("comment", ""),
-                "parser_used": row.get("parser_used", ""),
+                "website": row.get("website", ""), "geo": row.get("geo", ""),
+                "baseline_type": row.get("baseline_type", ""), "baseline_value": row.get("baseline_value"),
+                "wager": row.get("wager"), "rate": row.get("rate"), "manager_ftd": row.get("manager_ftd"),
+                "actual_valid_ftd": None, "delta_ftd": None, "manager_sum": row.get("manager_sum"),
+                "expected_sum_by_manager_ftd": None, "actual_sum": None, "sum_delta": None,
+                "is_sum_ok": False, "is_ftd_ok": False, "status": "ERROR",
+                "comment": row.get("comment", ""), "parser_used": row.get("parser_used", ""),
                 "raw_line": row.get("raw_line", ""),
             })
             continue
-
         geo_norm = normalize_geo(row["geo"])
         website = normalize_site_id(row.get("website", ""))
         baseline_type = row["baseline_type"]
@@ -551,66 +420,39 @@ def build_comparison(parsed_rows, export_df):
         rate = row["rate"]
         manager_ftd = row["manager_ftd"]
         manager_sum = row["manager_sum"]
-
         sub = export_df[export_df["geo_norm"] == geo_norm].copy()
         if website:
             sub = sub[sub["site_id"] == website].copy()
-
         if len(sub) > 0:
-            sub["is_eligible"] = sub.apply(
-                lambda x: is_valid_deposit(x["deposit"], x["bets"], baseline_type, baseline_value, wager),
-                axis=1,
-            )
+            sub["is_eligible"] = sub.apply(lambda x: is_valid_deposit(x["deposit"], x["bets"], baseline_type, baseline_value, wager), axis=1)
             eligible = sub[sub["is_eligible"]].copy()
         else:
             eligible = pd.DataFrame(columns=list(sub.columns) + ["is_eligible"])
-
         actual_valid_ftd = int(len(eligible))
         delta_ftd = actual_valid_ftd - manager_ftd if manager_ftd is not None else None
-
         expected_sum_by_manager_ftd = float(rate) * float(manager_ftd) if rate is not None and manager_ftd is not None else None
         payable_ftd = min(actual_valid_ftd, manager_ftd) if manager_ftd is not None else actual_valid_ftd
         actual_sum = float(rate) * float(payable_ftd) if rate is not None else None
         sum_delta = float(manager_sum) - float(actual_sum) if manager_sum is not None and actual_sum is not None else None
-
         is_sum_ok = is_close_money(manager_sum, expected_sum_by_manager_ftd, tol=0.5)
         is_ftd_ok = actual_valid_ftd >= manager_ftd if manager_ftd is not None else False
-
         if is_ftd_ok and is_sum_ok:
-            status = "OK"
-            comment = "По выгрузке депозитов достаточно, математика менеджера верная"
+            status = "OK"; comment = "По выгрузке депозитов достаточно, математика менеджера верная"
         elif (not is_ftd_ok) and is_sum_ok:
-            status = "ERROR"
-            comment = "Выгрузка подтверждает меньше валидных депозитов, чем подал менеджер"
+            status = "ERROR"; comment = "Выгрузка подтверждает меньше валидных депозитов, чем подал менеджер"
         elif is_ftd_ok and (not is_sum_ok):
-            status = "ERROR"
-            comment = "По выгрузке депозитов достаточно, но математика менеджера неверная"
+            status = "ERROR"; comment = "По выгрузке депозитов достаточно, но математика менеджера неверная"
         else:
-            status = "ERROR"
-            comment = "И депозитов не хватает, и математика менеджера неверная"
-
+            status = "ERROR"; comment = "И депозитов не хватает, и математика менеджера неверная"
         comparison_rows.append({
-            "website": website,
-            "geo": row["geo"],
-            "baseline_type": baseline_type,
-            "baseline_value": baseline_value,
-            "wager": wager,
-            "rate": rate,
-            "manager_ftd": manager_ftd,
-            "actual_valid_ftd": actual_valid_ftd,
-            "delta_ftd": delta_ftd,
-            "manager_sum": manager_sum,
-            "expected_sum_by_manager_ftd": expected_sum_by_manager_ftd,
-            "actual_sum": actual_sum,
-            "sum_delta": sum_delta,
-            "is_sum_ok": is_sum_ok,
-            "is_ftd_ok": is_ftd_ok,
-            "status": status,
-            "comment": comment,
-            "parser_used": row["parser_used"],
-            "raw_line": row["raw_line"],
+            "website": website, "geo": row["geo"], "baseline_type": baseline_type,
+            "baseline_value": baseline_value, "wager": wager, "rate": rate,
+            "manager_ftd": manager_ftd, "actual_valid_ftd": actual_valid_ftd, "delta_ftd": delta_ftd,
+            "manager_sum": manager_sum, "expected_sum_by_manager_ftd": expected_sum_by_manager_ftd,
+            "actual_sum": actual_sum, "sum_delta": sum_delta, "is_sum_ok": is_sum_ok,
+            "is_ftd_ok": is_ftd_ok, "status": status, "comment": comment,
+            "parser_used": row["parser_used"], "raw_line": row["raw_line"],
         })
-
         if len(eligible) > 0:
             elig = eligible.copy()
             elig["summary_website"] = website
@@ -621,15 +463,8 @@ def build_comparison(parsed_rows, export_df):
             elig["summary_rate"] = rate
             elig["summary_manager_ftd"] = manager_ftd
             eligible_rows.append(elig)
+    return pd.DataFrame(comparison_rows), (pd.concat(eligible_rows, ignore_index=True) if eligible_rows else pd.DataFrame())
 
-    comparison_df = pd.DataFrame(comparison_rows)
-    eligible_df = pd.concat(eligible_rows, ignore_index=True) if eligible_rows else pd.DataFrame()
-    return comparison_df, eligible_df
-
-
-# ---------------------------
-# Excel output
-# ---------------------------
 
 def autosize_worksheet(ws):
     for col_cells in ws.columns:
@@ -654,26 +489,21 @@ def colorize_comparison(ws):
     ok_fill = PatternFill("solid", fgColor="E2F0D9")
     err_fill = PatternFill("solid", fgColor="FCE4D6")
     warn_fill = PatternFill("solid", fgColor="FFF2CC")
-
     headers = {cell.value: cell.column for cell in ws[1]}
     status_col = headers.get("status")
     delta_col = headers.get("delta_ftd")
     sum_delta_col = headers.get("sum_delta")
-
     for row in range(2, ws.max_row + 1):
         status = ws.cell(row=row, column=status_col).value if status_col else None
         delta_val = ws.cell(row=row, column=delta_col).value if delta_col else None
         sum_delta_val = ws.cell(row=row, column=sum_delta_col).value if sum_delta_col else None
-
         fill = ok_fill
         if status == "ERROR":
             fill = err_fill
         elif delta_val == 0:
             fill = warn_fill
-
         for col in range(1, ws.max_column + 1):
             ws.cell(row=row, column=col).fill = fill
-
         try:
             if sum_delta_val is not None and float(sum_delta_val) > 0:
                 for col in range(1, ws.max_column + 1):
@@ -686,19 +516,9 @@ def write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecogniz
     with pd.ExcelWriter(output_xlsx, engine="openpyxl") as writer:
         comparison_df.to_excel(writer, sheet_name=COMPARISON_SHEET, index=False)
         parsed_preview_df.to_excel(writer, sheet_name=PREVIEW_SHEET, index=False)
-
-        if unrecognized_df is None or unrecognized_df.empty:
-            pd.DataFrame([{"info": "Все строки распознаны"}]).to_excel(writer, sheet_name=UNRECOGNIZED_SHEET, index=False)
-        else:
-            unrecognized_df.to_excel(writer, sheet_name=UNRECOGNIZED_SHEET, index=False)
-
-        if eligible_df is None or eligible_df.empty:
-            pd.DataFrame([{"info": "Нет подходящих игроков"}]).to_excel(writer, sheet_name=ELIGIBLE_SHEET, index=False)
-        else:
-            eligible_df.to_excel(writer, sheet_name=ELIGIBLE_SHEET, index=False)
-
+        (pd.DataFrame([{"info": "Все строки распознаны"}]) if unrecognized_df is None or unrecognized_df.empty else unrecognized_df).to_excel(writer, sheet_name=UNRECOGNIZED_SHEET, index=False)
+        (pd.DataFrame([{"info": "Нет подходящих игроков"}]) if eligible_df is None or eligible_df.empty else eligible_df).to_excel(writer, sheet_name=ELIGIBLE_SHEET, index=False)
         raw_export_df.to_excel(writer, sheet_name=RAW_SHEET, index=False)
-
         pd.DataFrame([
             {"rule": "Валидный депозит", "description": "deposit >= baseline (или > 0 для min/dep) и bets > wager"},
             {"rule": "FTD OK", "description": "actual_valid_ftd >= manager_ftd"},
@@ -707,7 +527,6 @@ def write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecogniz
             {"rule": "actual_sum", "description": "sum to pay = min(actual_valid_ftd, manager_ftd) * rate"},
             {"rule": "sum_delta", "description": "manager_sum - actual_sum"},
         ]).to_excel(writer, sheet_name=RULES_SHEET, index=False)
-
     wb = load_workbook(output_xlsx)
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -718,34 +537,13 @@ def write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecogniz
     wb.save(output_xlsx)
 
 
-# ---------------------------
-# Main entry for API
-# ---------------------------
-
-def process_file(input_path: str, summary_text: str, output_path: str):
+def process_file(input_xlsx: str, summary_text: str, output_xlsx: str):
     parsed_rows, unrecognized_rows = parse_summary_text(summary_text)
     parsed_preview_df = pd.DataFrame(parsed_rows)
-
-    export_df, raw_export_df = read_export_file(input_path)
+    export_df, raw_export_df = read_export_file(input_xlsx)
     comparison_df, eligible_df = build_comparison(parsed_rows, export_df)
     unrecognized_df = pd.DataFrame(unrecognized_rows)
-
-    write_excel_report(
-        output_xlsx=output_path,
-        parsed_preview_df=parsed_preview_df,
-        comparison_df=comparison_df,
-        unrecognized_df=unrecognized_df,
-        eligible_df=eligible_df,
-        raw_export_df=raw_export_df,
-    )
-
+    write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecognized_df, eligible_df, raw_export_df)
     ok_cnt = int((comparison_df["status"] == "OK").sum()) if not comparison_df.empty else 0
     err_cnt = int((comparison_df["status"] == "ERROR").sum()) if not comparison_df.empty else 0
-    total_cnt = len(comparison_df)
-
-    return {
-        "ok": ok_cnt,
-        "error": err_cnt,
-        "total": total_cnt,
-        "output_xlsx": output_path,
-    }
+    return {"ok": ok_cnt, "error": err_cnt, "total": len(comparison_df), "output_xlsx": output_xlsx}

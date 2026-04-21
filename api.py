@@ -16,45 +16,22 @@ def home():
 
 
 @app.post("/validate")
-async def validate(
-    file: UploadFile = File(...),
-    summary: str = Form("")
-):
+async def validate(file: UploadFile = File(...), summary: str = Form("")):
     try:
         with tempfile.TemporaryDirectory() as tmp:
             input_path = os.path.join(tmp, "input.xlsx")
             output_path = os.path.join(tmp, "result_deposits.xlsx")
-
             with open(input_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
-
             result = process_file(input_path, summary, output_path)
-
             if not os.path.exists(output_path):
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "error": "Output file was not created",
-                        "result": result,
-                    },
-                )
-
+                return JSONResponse(status_code=500, content={"error": "Output file was not created", "result": result})
             with open(output_path, "rb") as f:
                 file_bytes = f.read()
-
             return Response(
                 content=file_bytes,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={
-                    "Content-Disposition": 'attachment; filename="result_deposits.xlsx"'
-                },
+                headers={"Content-Disposition": 'attachment; filename="result_deposits.xlsx"'},
             )
-
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": str(e),
-                "trace": traceback.format_exc()
-            }
-        )
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
