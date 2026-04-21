@@ -1,8 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse
-import pandas as pd
+from fastapi.responses import FileResponse, JSONResponse
 import os
-import uuid
+import shutil
+import tempfile
+import traceback
+
+from checker_core import process_file
 
 app = FastAPI()
 
@@ -18,34 +21,35 @@ async def validate(
     summary: str = Form("")
 ):
     try:
-        # создаём уникальные имена файлов
-        input_filename = f"/tmp/input_{uuid.uuid4()}.xlsx"
-        output_filename = f"/tmp/output_{uuid.uuid4()}.xlsx"
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = os.path.join(tmp, "input.xlsx")
+            output_path = os.path.join(tmp, "result_deposits.xlsx")
 
-        # сохраняем входной файл
-        with open(input_filename, "wb") as f:
-            f.write(await file.read())
+            with open(input_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
 
-        # читаем Excel
-        df = pd.read_excel(input_filename)
+            result = process_file(input_path, summary, output_path)
 
-        # ===== ТВОЯ ЛОГИКА (пока простая) =====
-        df["validated"] = "OK"
+            if not os.path.exists(output_path):
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Output file was not created",
+                        "result": result,
+                    },
+                )
 
-        # если хочешь использовать текст из Telegram:
-        if summary:
-            df["summary"] = summary
-
-        # =====================================
-
-        # сохраняем результат
-        df.to_excel(output_filename, index=False)
-
-        return FileResponse(
-            output_filename,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename="result.xlsx"
-        )
+            return FileResponse(
+                output_path,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename="result_deposits.xlsx"
+            )
 
     except Exception as e:
-        return {"error": str(e)}
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc()
+            }
+        )
