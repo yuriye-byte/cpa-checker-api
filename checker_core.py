@@ -342,12 +342,32 @@ def read_export_file(xlsx_path):
 def is_valid_deposit(deposit, bets, baseline_type, baseline_value, wager):
     if deposit is None or bets is None or wager is None:
         return False
-    if bets <= wager:
+
+    # Wager rule:
+    # - if wager == 0, bets must be strictly greater than 0
+    # - if wager > 0, bets must be greater than or equal to wager
+    try:
+        wager_value = float(wager)
+        bets_value = float(bets)
+    except Exception:
         return False
+
+    if wager_value <= 0:
+        if bets_value <= 0:
+            return False
+    else:
+        if bets_value < wager_value:
+            return False
+
+    # Baseline rule:
+    # - regular baseline is inclusive: deposit >= baseline
+    # - min/dep mode means any positive deposit: deposit > 0
     if baseline_type == "positive":
         return deposit > 0
+
     if baseline_value is None:
         return False
+
     return deposit >= baseline_value
 
 def build_comparison(parsed_rows, export_df):
@@ -448,7 +468,7 @@ def write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecogniz
         raw_export_df.to_excel(writer, sheet_name=RAW_SHEET, index=False)
         pd.DataFrame([
             {"rule":"Источник сводки","description":"Сводка читается со 2-го листа входного Excel-файла"},
-            {"rule":"Валидный депозит","description":"deposit >= baseline (или > 0 для min/dep) и bets > wager"},
+            {"rule":"Валидный депозит","description":"deposit >= baseline (или > 0 для min/dep); если wager = 0, то bets > 0; если wager > 0, то bets >= wager"},
             {"rule":"FTD OK","description":"actual_valid_ftd >= manager_ftd"},
             {"rule":"SUM OK","description":"manager_sum ~= rate * manager_ftd (допуск 0.5)"},
             {"rule":"Website","description":"если Website/Siteid указан — фильтр по GEO + Website; если нет — только по GEO"},
