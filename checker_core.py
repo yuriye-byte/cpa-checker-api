@@ -113,6 +113,34 @@ def normalize_site_id(value):
         s = s.split(".")[0]
     return s
 
+
+def extract_site_id(line: str) -> str:
+    """
+    Supports manager summary variants:
+    - Website ID: 5284405
+    - Website: 5284405
+    - Site ID: 5284405
+    - Siteid 5284405
+    - Siteid-5284405
+    """
+    if not line:
+        return ""
+
+    patterns = [
+        r"\bWebsite\s*ID\s*[:;\-= ]\s*(\d+)\b",
+        r"\bWebsite\s*[:;\-= ]\s*(\d+)\b",
+        r"\bSite\s*ID\s*[:;\-= ]\s*(\d+)\b",
+        r"\bSiteid\s*[:;\-= ]?\s*(\d+)\b",
+        r"\bSite\s*[:;\-= ]\s*(\d+)\b",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, line, flags=re.I)
+        if m:
+            return normalize_site_id(m.group(1))
+
+    return ""
+
 def is_close_money(a, b, tol=0.5):
     if a is None or b is None:
         return False
@@ -125,7 +153,7 @@ def extract_number_after_keyword(line, keyword):
 def parse_en_structured(line):
     if "country:" not in line.lower():
         return None
-    site_m = re.search(r"\bSiteid\s+(\d+)\b", line, flags=re.I) or re.search(r"\bSiteid-(\d+)\b", line, flags=re.I) or re.search(r"\bWebsite\s*:\s*([^;,\n]+)", line, flags=re.I)
+    website = extract_site_id(line)
     geo_m = re.search(r"Country\s*:\s*([^;,\n]+)", line, flags=re.I)
     baseline_m = re.search(r"Baseline\s*:\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
     wager_m = re.search(r"Wager\s*:\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
@@ -134,7 +162,7 @@ def parse_en_structured(line):
     spend_m = re.search(r"Spend\s*(?:,\s*\$)?\s*[:;]\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", line, flags=re.I)
     if not (geo_m and baseline_m and wager_m and cpa_m and ftd_m and spend_m):
         return None
-    return {"status":"OK","parser_used":"en_structured","raw_line":line,"website":normalize_site_id(site_m.group(1)) if site_m else "",
+    return {"status":"OK","parser_used":"en_structured","raw_line":line,"website": website,
             "geo":normalize_spaces(geo_m.group(1)),"baseline_type":"inclusive","baseline_value":safe_float(baseline_m.group(1)),
             "wager":safe_float(wager_m.group(1)),"rate":safe_float(cpa_m.group(1)),"manager_ftd":safe_int(ftd_m.group(1)),
             "manager_sum":safe_float(spend_m.group(1)),"comment":""}
@@ -143,16 +171,15 @@ def parse_short_cpa(line):
     if "cpa" not in line.lower() or "ftd" not in line.lower():
         return None
     working_line = line
-    website = ""
-    site_m = re.search(r"^\s*Siteid\s+(\d+)\s*;\s*", working_line, flags=re.I) or re.search(r"^\s*Siteid-(\d+)\s+", working_line, flags=re.I)
-    if site_m:
-        website = normalize_site_id(site_m.group(1))
-        working_line = working_line[site_m.end():].strip()
-    else:
-        website_m = re.search(r"^\s*Website\s*:?\s*([^;\s,:]+)\s+", working_line, flags=re.I)
-        if website_m:
-            website = normalize_site_id(website_m.group(1))
-            working_line = working_line[website_m.end():].strip()
+    website = extract_site_id(working_line)
+
+    # Remove leading site/website prefix before GEO detection.
+    working_line = re.sub(
+        r"^\s*(?:Website\s*ID|Website|Site\s*ID|Siteid|Site)\s*[:;\-= ]\s*\d+\s*;?\s*",
+        "",
+        working_line,
+        flags=re.I,
+    ).strip()
     if re.search(r"\bmin\s*/\s*dep\b", working_line, flags=re.I):
         baseline_type = "positive"; baseline_value = 0.0
         geo = re.split(r"\bmin\s*/\s*dep\b", working_line, flags=re.I)[0].strip(" ,;")
@@ -177,14 +204,14 @@ def parse_short_cpa(line):
 def parse_flexible(line):
     if not line:
         return None
-    working_line = line; website = ""
-    site_m = re.search(r"\bSiteid\s+(\d+)\b", working_line, flags=re.I) or re.search(r"\bSiteid-(\d+)\b", working_line, flags=re.I)
-    if site_m:
-        website = normalize_site_id(site_m.group(1)); working_line = working_line.replace(site_m.group(0), " ")
-    else:
-        web_m = re.search(r"\bWebsite\s*:?\s*(\d+)\b", working_line, flags=re.I)
-        if web_m:
-            website = normalize_site_id(web_m.group(1)); working_line = working_line.replace(web_m.group(0), " ")
+    working_line = line
+    website = extract_site_id(working_line)
+    working_line = re.sub(
+        r"\b(?:Website\s*ID|Website|Site\s*ID|Siteid|Site)\s*[:;\-= ]\s*\d+\b",
+        " ",
+        working_line,
+        flags=re.I,
+    )
     geo = re.split(r"\b(CPA|FTD|Spend|Base|Baseline|Wager|\$)\b", working_line, flags=re.I)[0].strip(" ,;")
     def find_num(keyword):
         m = re.search(rf"{keyword}\s*[:;]?\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)", working_line, flags=re.I)
@@ -205,10 +232,7 @@ def parse_flexible(line):
 def parse_geo_list_format(line):
     if "(" not in line:
         return None
-    website = ""
-    site_m = re.search(r"\bSite(?:id)?\s*[-: ]\s*(\d+)\b", line, flags=re.I)
-    if site_m:
-        website = normalize_site_id(site_m.group(1))
+    website = extract_site_id(line)
     pattern = re.compile(r"\b([A-Z]{2})\s*-\s*(?:\$)?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:\$)?\s*\(\s*([0-9]+)\s*\)", flags=re.I)
     matches = pattern.findall(line)
     if not matches:
@@ -471,7 +495,7 @@ def write_excel_report(output_xlsx, parsed_preview_df, comparison_df, unrecogniz
             {"rule":"Валидный депозит","description":"deposit >= baseline (или > 0 для min/dep); если wager = 0, то bets > 0; если wager > 0, то bets >= wager"},
             {"rule":"FTD OK","description":"actual_valid_ftd >= manager_ftd"},
             {"rule":"SUM OK","description":"manager_sum ~= rate * manager_ftd (допуск 0.5)"},
-            {"rule":"Website","description":"если Website/Siteid указан — фильтр по GEO + Website; если нет — только по GEO"},
+            {"rule":"Website","description":"если Website ID/Website/Site ID/Siteid указан — фильтр по GEO + Website; если нет — только по GEO"},
             {"rule":"actual_sum","description":"sum to pay = min(actual_valid_ftd, manager_ftd) * rate"},
             {"rule":"sum_delta","description":"manager_sum - actual_sum"},
         ]).to_excel(writer, sheet_name=RULES_SHEET, index=False)
