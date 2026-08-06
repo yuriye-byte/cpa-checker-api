@@ -65,6 +65,18 @@ COUNTRY_ALIASES = {
     "united arab emirates": "united arab emirates", "usa": "united states", "us": "united states",
     "united states of america": "united states", "united states": "united states",
     "uk": "united kingdom", "great britain": "united kingdom", "united kingdom": "united kingdom",
+
+    # Palestine
+    "palestinian territory": "palestine",
+    "palestinian territories": "palestine",
+    "state of palestine": "palestine",
+    "palestine": "palestine",
+
+    # Guinea
+    "guinea-conakry": "guinea",
+    "guinea conakry": "guinea",
+    "republic of guinea": "guinea",
+    "guinea": "guinea",
 }
 
 GEO_CODE_MAP = {
