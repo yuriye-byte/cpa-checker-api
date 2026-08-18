@@ -66,6 +66,16 @@ COUNTRY_ALIASES = {
     "united states of america": "united states", "united states": "united states",
     "uk": "united kingdom", "great britain": "united kingdom", "united kingdom": "united kingdom",
 
+    # Congo naming used by this department / CRM export
+    "congo (drc)": "congo drc",
+    "congo (kinshasa)": "congo drc",
+    "democratic republic of the congo": "congo drc",
+    "congo, democratic republic of the": "congo drc",
+
+    "congo": "congo republic",
+    "congo (brazzaville)": "congo republic",
+    "republic of the congo": "congo republic",
+
     # Palestine
     "palestinian territory": "palestine",
     "palestinian territories": "palestine",
@@ -260,6 +270,121 @@ def parse_geo_list_format(line):
                         "manager_sum":spend_val,"comment":""})
     return results if results else None
 
+
+def extract_manager_site_ids(text):
+    """
+    Extracts the whitelist of Site IDs from this department's full CRM description.
+
+    Supported examples:
+      Site ID: 4545440, 4643694, 4693546
+      Site id:2141451
+      Siteid-1249023
+      Siteid-1728657, 2053177
+    """
+    flat = normalize_spaces(text)
+    marker = re.search(r"\b(?:Site\s*ID|Siteid)\b", flat, flags=re.I)
+    if not marker:
+        return []
+
+    tail = flat[marker.end():]
+
+    # Stop at the next service-text marker so dates, Aff ID and totals
+    # can never accidentally become Site IDs.
+    stop_patterns = [
+        r"\bAff\s*ID\b",
+        r"\bКлоакер",
+        r"\bОплата\b",
+        r"\bПостоплата\b",
+        r"\bПредоплата\b",
+        r"\bОбщая\s+сумма\b",
+    ]
+    stop_positions = []
+    for pat in stop_patterns:
+        m = re.search(pat, tail, flags=re.I)
+        if m:
+            stop_positions.append(m.start())
+
+    if stop_positions:
+        tail = tail[:min(stop_positions)]
+
+    # Site IDs in current CRM are long numeric identifiers.
+    ids = re.findall(r"\b\d{5,}\b", tail)
+
+    result = []
+    seen = set()
+    for site_id in ids:
+        site_id = normalize_site_id(site_id)
+        if site_id and site_id not in seen:
+            seen.add(site_id)
+            result.append(site_id)
+    return result
+
+
+def parse_department_full_description(text):
+    """
+    Dedicated parser for the second department's generated CRM description.
+
+    It deliberately requires BOTH an Aff ID and a Site ID marker, so it does
+    not intercept the older summary formats.
+
+    Service text / URL / payment period / cloak sources are ignored.
+    """
+    flat = normalize_spaces(text)
+
+    if not re.search(r"\bAff\s*ID\b", flat, flags=re.I):
+        return None
+    if not re.search(r"\b(?:Site\s*ID|Siteid)\b", flat, flags=re.I):
+        return None
+
+    site_ids = extract_manager_site_ids(flat)
+    if not site_ids:
+        return None
+
+    # Supports both:
+    # EG-$37000(1480)
+    # DZ-9925$(132)
+    # RU - 14820$(156)
+    # and missing commas between consecutive GEO entries.
+    geo_pattern = re.compile(
+        r"\b([A-Z]{2})\s*-\s*"
+        r"(?:\$)?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:\$)?\s*"
+        r"\(\s*([0-9]+)\s*\)",
+        flags=re.I,
+    )
+    matches = geo_pattern.findall(flat)
+    if not matches:
+        return None
+
+    rows = []
+    for geo_code, spend, ftd in matches:
+        spend_val = safe_float(spend)
+        ftd_val = safe_int(ftd)
+        if spend_val is None or ftd_val in (None, 0):
+            continue
+
+        rows.append({
+            "status": "OK",
+            "parser_used": "department_full_description",
+            "raw_line": flat,
+            # Multiple Site IDs are a whitelist. build_comparison maps them
+            # to the proper GEO using the CRM export itself.
+            "website": "",
+            "website_ids": site_ids.copy(),
+            "geo": GEO_CODE_MAP.get(geo_code.upper(), geo_code.upper()),
+            # This manager does not provide baseline/wager explicitly.
+            # Existing business rule: baseline 0 + wager 0 => deposit >= 0
+            # and bets must be > 0.
+            "baseline_type": "inclusive",
+            "baseline_value": 0.0,
+            "wager": 0.0,
+            "rate": spend_val / ftd_val,
+            "manager_ftd": ftd_val,
+            "manager_sum": spend_val,
+            "comment": "",
+        })
+
+    return rows if rows else None
+
 def parse_summary_line(line):
     line = normalize_spaces(line)
     if not line:
@@ -280,6 +405,14 @@ def parse_summary_line(line):
 
 def parse_summary_text(text):
     parsed, unrecognized = [], []
+
+    # New department: parse the WHOLE second sheet as one description.
+    # This makes one-line, two-line and multi-line Excel pastes equivalent.
+    full_description_rows = parse_department_full_description(text)
+    if full_description_rows is not None:
+        return full_description_rows, []
+
+    # All old formats keep their previous line-by-line behavior.
     for raw in text.splitlines():
         raw = normalize_spaces(raw)
         if not raw:
@@ -417,12 +550,37 @@ def build_comparison(parsed_rows, export_df):
                                     "sum_delta":None,"is_sum_ok":False,"is_ftd_ok":False,"status":"ERROR",
                                     "comment":row.get("comment",""),"parser_used":row.get("parser_used",""),"raw_line":row.get("raw_line","")})
             continue
-        geo_norm = normalize_geo(row["geo"]); website = normalize_site_id(row.get("website",""))
+        geo_norm = normalize_geo(row["geo"])
+        website = normalize_site_id(row.get("website",""))
+        website_ids = [
+            normalize_site_id(x)
+            for x in row.get("website_ids", [])
+            if normalize_site_id(x)
+        ]
+
         baseline_type = row["baseline_type"]; baseline_value = row["baseline_value"]; wager = row["wager"]
         rate = row["rate"]; manager_ftd = row["manager_ftd"]; manager_sum = row["manager_sum"]
+
+        # GEO is always matched first.
         sub = export_df[export_df["geo_norm"] == geo_norm].copy()
-        if website:
+
+        # New department: ONLY manager-listed Site IDs are eligible.
+        # Site IDs present in CRM but absent from this whitelist are ignored.
+        if website_ids:
+            sub = sub[sub["site_id"].isin(website_ids)].copy()
+        elif website:
+            # Existing formats keep the old single-Site-ID behavior.
             sub = sub[sub["site_id"] == website].copy()
+
+        # For the new multi-site format, show only Site IDs that actually
+        # belong to this GEO in this export.
+        if website_ids:
+            matched_site_ids = sorted(
+                {normalize_site_id(x) for x in sub["site_id"].tolist() if normalize_site_id(x)}
+            )
+            website_display = ", ".join(matched_site_ids)
+        else:
+            website_display = website
         if len(sub) > 0:
             sub["is_eligible"] = sub.apply(lambda x: is_valid_deposit(x["deposit"], x["bets"], baseline_type, baseline_value, wager), axis=1)
             eligible = sub[sub["is_eligible"]].copy()
@@ -444,14 +602,14 @@ def build_comparison(parsed_rows, export_df):
             status = "ERROR"; comment = "По выгрузке депозитов достаточно, но математика менеджера неверная"
         else:
             status = "ERROR"; comment = "И депозитов не хватает, и математика менеджера неверная"
-        comparison_rows.append({"website":website,"geo":row["geo"],"baseline_type":baseline_type,"baseline_value":baseline_value,
+        comparison_rows.append({"website":website_display,"geo":row["geo"],"baseline_type":baseline_type,"baseline_value":baseline_value,
                                 "wager":wager,"rate":rate,"manager_ftd":manager_ftd,"actual_valid_ftd":actual_valid_ftd,
                                 "delta_ftd":delta_ftd,"manager_sum":manager_sum,"expected_sum_by_manager_ftd":expected_sum_by_manager_ftd,
                                 "actual_sum":actual_sum,"sum_delta":sum_delta,"is_sum_ok":is_sum_ok,"is_ftd_ok":is_ftd_ok,
                                 "status":status,"comment":comment,"parser_used":row["parser_used"],"raw_line":row["raw_line"]})
         if len(eligible) > 0:
             elig = eligible.copy()
-            elig["summary_website"] = website; elig["summary_geo"] = row["geo"]; elig["summary_baseline_type"] = baseline_type
+            elig["summary_website"] = website_display; elig["summary_geo"] = row["geo"]; elig["summary_baseline_type"] = baseline_type
             elig["summary_baseline_value"] = baseline_value; elig["summary_wager"] = wager
             elig["summary_rate"] = rate; elig["summary_manager_ftd"] = manager_ftd
             eligible_rows.append(elig)
